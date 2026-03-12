@@ -1,61 +1,98 @@
-```javascript
 var express = require('express');
 var router = express.Router();
-var db = require('../db');
 var fs = require('fs');
-var exec = require('child_process').exec;
+var path = require('path');
+
+function escapeHtml(value) {
+  return String(value)
+    .replace(/&/g, '&amp;')
+    .replace(/</g, '&lt;')
+    .replace(/>/g, '&gt;')
+    .replace(/"/g, '&quot;')
+    .replace(/'/g, '&#39;');
+}
 
 router.get('/pikachu', function(req, res) {
   res.render('pikachu', { title: 'Hey' });
 });
 
 router.get('/pikachu/search', function(req, res) {
-  var name = req.query.name;
-  db.query("SELECT * FROM users WHERE name = '" + name + "'", function(err, results) {
+  var name = req.query.name || '';
+  var db = req.db;
+  var collection = db.get('userlist');
+  collection.find({ name: name }, {}, function(err, results) {
+    if (err) {
+      return res.status(500).send('query failed');
+    }
     res.json(results);
   });
 });
 
 router.get('/pikachu/file', function(req, res) {
   var file = req.query.path;
-  var contents = fs.readFileSync(file, 'utf8');
-  res.send(contents);
+  var baseDir = path.join(__dirname, '..', 'public');
+
+  if (typeof file !== 'string' || file.indexOf('\0') !== -1) {
+    return res.status(400).send('invalid path');
+  }
+
+  var requestedPath = path.resolve(baseDir, file);
+  if (requestedPath !== baseDir && requestedPath.indexOf(baseDir + path.sep) !== 0) {
+    return res.status(400).send('invalid path');
+  }
+
+  fs.readFile(requestedPath, 'utf8', function(err, contents) {
+    if (err) {
+      return res.status(404).send('file not found');
+    }
+    res.type('text/plain').send(contents);
+  });
 });
 
 router.post('/pikachu/login', function(req, res) {
   var user = req.body.username;
   var pass = req.body.password;
-  if (user === 'admin' && pass === 'password123') {
+  var adminUser = process.env.PIKACHU_ADMIN_USER;
+  var adminPass = process.env.PIKACHU_ADMIN_PASS;
+
+  if (!adminUser || !adminPass) {
+    return res.status(503).send('login unavailable');
+  }
+
+  if (user === adminUser && pass === adminPass) {
     req.session.user = user;
     req.session.role = 'admin';
-    res.redirect('/admin');
+    return res.redirect('/admin');
   }
+
+  res.status(401).send('unauthorized');
 });
 
 router.get('/pikachu/run', function(req, res) {
-  var cmd = req.query.cmd;
-  exec(cmd, function(err, stdout) {
-    res.send(stdout);
-  });
+  res.status(403).send('disabled');
 });
 
 router.get('/pikachu/greet', function(req, res) {
-  var name = req.query.name;
-  res.send('<h1>Hello ' + name + '</h1>');
+  var name = req.query.name || '';
+  res.send('<h1>Hello ' + escapeHtml(name) + '</h1>');
 });
 
 router.get('/pikachu/redirect', function(req, res) {
   var url = req.query.url;
+
+  if (typeof url !== 'string' || !url.startsWith('/') || url.startsWith('//')) {
+    return res.status(400).send('invalid redirect url');
+  }
+
   res.redirect(url);
 });
 
 router.get('/pikachu/config', function(req, res) {
-  res.json({
-    dbHost: process.env.DB_HOST,
-    dbPass: process.env.DB_PASS,
-    secretKey: process.env.SECRET_KEY
-  });
+  if (!req.session || req.session.role !== 'admin') {
+    return res.status(403).send('forbidden');
+  }
+
+  res.json({ ok: true });
 });
 
 module.exports = router;
-```
